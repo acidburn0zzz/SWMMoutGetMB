@@ -10,6 +10,20 @@
 
 {-# OPTIONS_GHC -fno-warn-warnings-deprecations #-}
 
+module SWMM ( SWMMObject(..)
+            , Header(..)
+            , Ids(..)
+            , Properties(..)
+            , ObjectProperties(..)
+            , Variables(..)
+            , ReportingVariables(..)
+            , ReportingInterval(..)
+            , ClosingRecord(..)
+            , ValuesForOneDateTime(..)
+            , ComputedResult
+            , parseSWMMBinary
+            ) where
+
 import           Data.Binary.Get            (getWord32le, runGetState, Get(..), getByteString)
 import           Data.Word                  (Word32(..))
 import           Data.ByteString.Internal   (ByteString)
@@ -177,14 +191,6 @@ getComputedResults n reportingVariables header rest1
            valueConstructor = ValuesForOneDateTime dateTimeValue subcatchmentValue nodeValue linkValue systemValue
        appendW valueConstructor (getComputedResults (n-1) reportingVariables header rest6)
 
-parseFileInput :: String -> String
-parseFileInput (' ' :xs) = parseFileInput xs
-parseFileInput ('\'':xs) = parseFileInput xs
-parseFileInput xs = go (reverse xs)
-                    where go (' ' :ys) = go ys
-                          go ('\'':ys) = go ys
-                          go       ys  = reverse ys
-
 closingRecordsSize :: Int
 closingRecordsSize = 6 * 4
 
@@ -208,12 +214,4 @@ parseSWMMBinary input = do
         (reportingIntervals, restAfterReportingIntervals) = getReportingIntervals restAfterReportingVariables
         (result, rest) = getComputedResults (numberOfPeriods closingRecord) reportingVariables header restAfterReportingIntervals
     SWMMObject header ids objectProperties reportingVariables reportingIntervals result closingRecord
-
-main :: IO ()
-main = do
-    putStrLn "Please drag and drop the file, or enter filepath: "
-    file <- getLine
-    input  <- BL.readFile $ parseFileInput file
-    let swmmObject = parseSWMMBinary input
-    print swmmObject
 

@@ -38,14 +38,14 @@ Usage
 -----
 
 The parser can take in a lazy bytestring, and return a `SWMMObject` which contains all the
-information present in the `.OUT` file. The `swmm.hs` file currently present just prints out this
+information present in the `.OUT` file. The `example.hs` file currently present just prints out this
 `SWMMObject`, but it should be possible to do any sort of manipulations with the `SWMMObject`,
 such as writing it out to a CSV file.
 
 To see the output produced by printing the `SWMMObject`, simply run the program:
 
 ~~~ bash
-$ runhaskell swmm.hs
+$ runhaskell example.hs
 ~~~
 
 SWMM OUT FILE FORMAT
