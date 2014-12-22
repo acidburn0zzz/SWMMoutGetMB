@@ -18,9 +18,9 @@ module SWMM ( SWMMObject(..)
             , Variables(..)
             , ReportingVariables(..)
             , ReportingInterval(..)
-            , ClosingRecord(..)
             , ValuesForOneDateTime(..)
             , ComputedResult
+            , ClosingRecord(..)
             , parseSWMMBinary
             ) where
 
@@ -29,7 +29,106 @@ import           Data.Word                  (Word32(..))
 import           Data.ByteString.Internal   (ByteString)
 import           Control.Applicative        ((<$>), (<*>))
 import           Data.Binary.IEEE754        (getFloat32le, getFloat64le)
-import qualified Data.ByteString.Lazy as BL (ByteString, readFile, pack, unpack)
+import qualified Data.ByteString.Lazy as BL (ByteString, pack, unpack)
+
+data SWMMObject = SWMMObject { header        :: Header
+                             , ids           :: Ids
+                             , properties    :: ObjectProperties
+                             , variables     :: ReportingVariables
+                             , intervals     :: ReportingInterval
+                             , result        :: ComputedResult
+                             , closingRecord :: ClosingRecord
+                             } deriving (Show)
+
+data Header = Header { headerIdNumber        :: Integer
+                     , versionNumber         :: Integer
+                     , codeNumber            :: Integer
+                     , numberOfSubcatchments :: Integer
+                     , numberOfNodes         :: Integer
+                     , numberOfLinks         :: Integer
+                     , numberOfPollutants    :: Integer
+                     } deriving (Show)
+
+data Ids = Ids { subcatchmentIds  :: [ByteString]
+               , nodeIds          :: [ByteString]
+               , linkIds          :: [ByteString]
+               , pollutantIds     :: [ByteString]
+               , concentrationIds :: [Integer]
+               } deriving (Show)
+
+data ObjectProperties = ObjectProperties { subcatchmentProperties :: Properties
+                                         , nodeProperties         :: Properties
+                                         , linkProperties         :: Properties
+					 } deriving (Show)
+
+data ReportingVariables = ReportingVariables { subcatchmentVariables :: Variables
+                                             , nodeVariables         :: Variables
+                                             , linkVariables         :: Variables
+                                             , systemVariables       :: Variables
+                                             } deriving (Show)
+
+
+data ReportingInterval = ReportingInterval { startDateTime :: Double
+                                           , timeIntervals :: Integer
+                                           } deriving (Show)
+
+type ComputedResult = [ValuesForOneDateTime]
+
+data ClosingRecord = ClosingRecord { idBytePosition         :: Integer
+                                   , propertiesBytePosition :: Integer
+                                   , resultBytePosition     :: Integer
+                                   , numberOfPeriods        :: Integer
+                                   , errorCode              :: Integer
+                                   , closingIdNumber        :: Integer
+                                   } deriving (Show)
+
+data Properties = Properties { numberOfProperties   :: Integer
+                             , codeNumberProperties :: [Integer]
+                             , valueProperties      :: [Float]
+                             } deriving (Show)
+
+data Variables = Variables { numberOfVariables   :: Integer
+                           , codeNumberVariables :: [Integer]
+                           } deriving (Show)
+
+data ValuesForOneDateTime = ValuesForOneDateTime { dateTimeValue     :: Double
+                                                 , subcatchmentValue :: [Float]
+                                                 , nodeValue         :: [Float]
+                                                 , linkValue         :: [Float]
+                                                 , systemValue       :: [Float]
+                                                 } deriving (Show)
+
+closingRecordSize :: Int
+closingRecordSize = 6 * 4
+
+getHeader :: Get Header
+getHeader = Header <$> a
+                   <*> a
+                   <*> a
+                   <*> a
+                   <*> a
+                   <*> a
+                   <*> a
+            where a = getIntegerWord32le
+
+parseSWMMBinary :: BL.ByteString -> SWMMObject
+parseSWMMBinary input = do
+    let closingByteString  = getClosingByteString input
+        (closingRecord, _) = getClosingRecords closingByteString
+        (header, rest1, _) = runGetState getHeader input 1
+        (ids, rest2) = getIds rest1 header
+        (objectProperties, rest3) = getObjectProperties header rest2
+        (reportingVariables, rest4) = getReportingVariables rest3
+        (reportingIntervals, rest5) = getReportingIntervals rest4
+        (result, rest6) = getComputedResults (numberOfPeriods closingRecord)
+                                             reportingVariables header rest5
+    SWMMObject header
+               ids
+               objectProperties
+               reportingVariables
+               reportingIntervals
+               result
+               closingRecord
 
 getIntegerWord32le :: Get Integer
 getIntegerWord32le = fromIntegral <$> getWord32le
@@ -49,80 +148,51 @@ getDecimals n input
     | otherwise = appendW w (getDecimals (n-1) rest)
                   where (w, rest, _) = runGetState getFloat32le input 1
 
-getIds :: Integer -> BL.ByteString -> ([ByteString], BL.ByteString)
-getIds n input
+getByteStrings :: Integer -> BL.ByteString -> ([ByteString], BL.ByteString)
+getByteStrings n input
     | n == 0    = ([], input)
-    | otherwise = appendW w (getIds (n-1) rest)
+    | otherwise = appendW w (getByteStrings (n-1) rest)
                   where (c, r, _) = runGetState getWord32le input 1
                         (w, rest, _) = runGetState ((getByteString . fromIntegral) c) r 1
 
-data Header = Header { headerIdNumber        :: Integer
-                     , versionNumber         :: Integer
-                     , codeNumber            :: Integer
-                     , numberOfSubcatchments :: Integer
-                     , numberOfNodes         :: Integer
-                     , numberOfLinks         :: Integer
-                     , numberOfPollutants    :: Integer
-                     } deriving (Show)
+getClosingByteString :: BL.ByteString -> BL.ByteString
+getClosingByteString = BL.pack . reverse . take closingRecordSize . reverse . BL.unpack
 
-getHeader :: Get Header
-getHeader = applyHeaderFromList <$> take 7 $ repeat getIntegerWord32le
-
-applyHeaderFromList :: [Get Integer] -> Get Header
-applyHeaderFromList [a,b,c,d,e,f,g] = Header <$> a <*> b <*> c <*> d <*> e <*> f <*> g
- 
-data Ids = Ids { subcatchmentIds  :: [ByteString]
-               , nodeIds          :: [ByteString]
-               , linkIds          :: [ByteString]
-               , pollutantIds     :: [ByteString]
-               , concentrationIds :: [Integer]
-               } deriving (Show)
-
-parseIds :: BL.ByteString -> Header -> (Ids, BL.ByteString)
-parseIds rest1 header = do
-    let (subcatchments, rest2) = getIds (numberOfSubcatchments header) rest1
-        (nodes, rest3)         = getIds (numberOfNodes header) rest2
-        (links, rest4)         = getIds (numberOfLinks header) rest3
-        (pollutants, rest5)    = getIds (numberOfPollutants header) rest4
+getIds :: BL.ByteString -> Header -> (Ids, BL.ByteString)
+getIds rest1 header = do
+    let (subcatchments, rest2) = getByteStrings (numberOfSubcatchments header) rest1
+        (nodes, rest3)         = getByteStrings (numberOfNodes header) rest2
+        (links, rest4)         = getByteStrings (numberOfLinks header) rest3
+        (pollutants, rest5)    = getByteStrings (numberOfPollutants header) rest4
         (pollutantConcentrationUnits, rest6) = getWords (numberOfPollutants header) rest5
     (Ids subcatchments nodes links pollutants pollutantConcentrationUnits, rest6)
-
-data Properties = Properties { numberOfProperties   :: Integer
-                             , codeNumberProperties :: [Integer]
-                             , valueProperties      :: [Float]
-                             } deriving (Show)
-
-data ObjectProperties = ObjectProperties { subcatchmentProperties :: Properties
-                                         , nodeProperties         :: Properties
-                                         , linkProperties         :: Properties
-					 } deriving (Show)
 
 getObjectProperties :: Header -> BL.ByteString -> (ObjectProperties, BL.ByteString)
 getObjectProperties header rest1 = do
     let (numberOfSubcatchmentProperties, rest2, _) = runGetState getIntegerWord32le rest1 1
         (codeNumberSubcatchmentProperties, rest3)  = getWords numberOfSubcatchmentProperties rest2
-        (valueSubcatchmentProperties, rest4)       = getDecimals (numberOfSubcatchmentProperties * numberOfSubcatchments header) rest3
+        (valueSubcatchmentProperties, rest4)       = getDecimals n rest3
+                                                     where n = numberOfSubcatchmentProperties
+                                                             * numberOfSubcatchments header
         (numberOfNodeProperties, rest5, _)         = runGetState getIntegerWord32le rest4 1
         (codeNumberNodeProperties, rest6)          = getWords numberOfNodeProperties rest5
-        (valueNodeProperties, rest7)               = getDecimals (numberOfNodeProperties * numberOfNodes header) rest6
+        (valueNodeProperties, rest7)               = getDecimals (numberOfNodeProperties
+                                                                 * numberOfNodes header) rest6
         (numberOfLinkProperties, rest8, _)         = runGetState getIntegerWord32le rest7 1
         (codeNumberLinkProperties, rest9)          = getWords numberOfLinkProperties rest8
-        (valueLinkProperties, rest10)              = getDecimals (numberOfLinkProperties * numberOfLinks header) rest9
-        subcatchment = Properties numberOfSubcatchmentProperties codeNumberSubcatchmentProperties valueSubcatchmentProperties
-        node         = Properties numberOfNodeProperties codeNumberNodeProperties valueNodeProperties
-        link         = Properties numberOfLinkProperties codeNumberLinkProperties valueLinkProperties
+        (valueLinkProperties, rest10)              = getDecimals (numberOfLinkProperties
+                                                                 * numberOfLinks header) rest9
+        subcatchment = Properties numberOfSubcatchmentProperties
+                                  codeNumberSubcatchmentProperties
+                                  valueSubcatchmentProperties
+        node         = Properties numberOfNodeProperties
+                                  codeNumberNodeProperties
+                                  valueNodeProperties
+        link         = Properties numberOfLinkProperties
+                                  codeNumberLinkProperties
+                                  valueLinkProperties
         object = ObjectProperties subcatchment node link
     (object, rest10)
-
-data Variables = Variables { numberOfVariables   :: Integer
-                           , codeNumberVariables :: [Integer]
-                           } deriving (Show)
-
-data ReportingVariables = ReportingVariables { subcatchmentVariables :: Variables
-                                             , nodeVariables         :: Variables
-                                             , linkVariables         :: Variables
-                                             , systemVariables       :: Variables
-                                             } deriving (Show)
 
 getReportingVariables :: BL.ByteString -> (ReportingVariables, BL.ByteString)
 getReportingVariables rest1 = do
@@ -141,10 +211,6 @@ getReportingVariables rest1 = do
         reportingVariables = ReportingVariables subcatchment node link system
     (reportingVariables, rest9)
 
-data ReportingInterval = ReportingInterval { startDateTime :: Double
-                                           , timeIntervals :: Integer
-                                           } deriving (Show)
-
 getReportingIntervals :: BL.ByteString -> (ReportingInterval, BL.ByteString)
 getReportingIntervals rest1 = do
     let (startDateTime, rest2, _) = runGetState getFloat64le rest1 1
@@ -152,13 +218,29 @@ getReportingIntervals rest1 = do
         reportingInterval = ReportingInterval startDateTime timeIntervals
     (reportingInterval, rest3)
 
-data ClosingRecord = ClosingRecord { idBytePosition         :: Integer
-                                   , propertiesBytePosition :: Integer
-                                   , resultBytePosition     :: Integer
-                                   , numberOfPeriods        :: Integer
-                                   , errorCode              :: Integer
-                                   , closingIdNumber        :: Integer
-                                   } deriving (Show)
+getComputedResults :: Integer -> ReportingVariables -> Header -> BL.ByteString
+                   -> ([ValuesForOneDateTime], BL.ByteString)
+getComputedResults n reportingVariables header rest1
+    | n == 0    = ([], rest1)
+    | otherwise = do
+        let (dateTimeValue, rest2, _)  = runGetState getFloat64le rest1 1
+            (subcatchmentValue, rest3) = getDecimals n rest2
+                where n = numberOfSubcatchments header
+                        * (numberOfVariables . subcatchmentVariables) reportingVariables
+            (nodeValue, rest4) = getDecimals n rest3
+                where n = numberOfNodes header
+                        * (numberOfVariables . nodeVariables) reportingVariables
+            (linkValue, rest5) = getDecimals n rest4
+                where n = numberOfLinks header
+                        * (numberOfVariables . linkVariables) reportingVariables
+            (systemValue, rest6) = getDecimals n rest5
+                where n = (numberOfVariables . systemVariables) reportingVariables
+            valueConstructor = ValuesForOneDateTime dateTimeValue
+                                                    subcatchmentValue
+                                                    nodeValue
+                                                    linkValue
+                                                    systemValue
+        appendW valueConstructor (getComputedResults (n-1) reportingVariables header rest6)
 
 getClosingRecords :: BL.ByteString -> (ClosingRecord, BL.ByteString)
 getClosingRecords closingByteString = do
@@ -168,50 +250,10 @@ getClosingRecords closingByteString = do
         (numberOfReportingPeriods, rest5, _)     = runGetState getIntegerWord32le rest4 1
         (errorCodeStatus, rest6, _)              = runGetState getIntegerWord32le rest5 1
         (closingIdNumber, rest7, _)              = runGetState getIntegerWord32le rest6 1
-    (ClosingRecord objectIdBytePosition objectPropertiesBytePosition computedResultsBytePosition numberOfReportingPeriods errorCodeStatus closingIdNumber, rest7)
-
-data ValuesForOneDateTime = ValuesForOneDateTime { dateTimeValue     :: Double
-                                                 , subcatchmentValue :: [Float]
-                                                 , nodeValue         :: [Float]
-                                                 , linkValue         :: [Float]
-                                                 , systemValue       :: [Float]
-                                                 } deriving (Show)
-
-type ComputedResult = [ValuesForOneDateTime]
-
-getComputedResults :: Integer -> ReportingVariables -> Header -> BL.ByteString -> ([ValuesForOneDateTime], BL.ByteString)
-getComputedResults n reportingVariables header rest1
-    | n == 0    = ([], rest1)
-    | otherwise = do
-       let (dateTimeValue, rest2, _)  = runGetState getFloat64le rest1 1
-           (subcatchmentValue, rest3) = getDecimals (numberOfSubcatchments header * numberOfVariables (subcatchmentVariables reportingVariables)) rest2
-           (nodeValue, rest4)         = getDecimals (numberOfNodes header * numberOfVariables (nodeVariables reportingVariables)) rest3
-           (linkValue, rest5)         = getDecimals (numberOfLinks header * numberOfVariables (linkVariables reportingVariables)) rest4
-           (systemValue, rest6)       = getDecimals (numberOfVariables (systemVariables reportingVariables)) rest5
-           valueConstructor = ValuesForOneDateTime dateTimeValue subcatchmentValue nodeValue linkValue systemValue
-       appendW valueConstructor (getComputedResults (n-1) reportingVariables header rest6)
-
-closingRecordsSize :: Int
-closingRecordsSize = 6 * 4
-
-data SWMMObject = SWMMObject { header        :: Header
-                             , ids           :: Ids
-                             , properties    :: ObjectProperties
-                             , variables     :: ReportingVariables
-                             , intervals     :: ReportingInterval
-                             , result        :: ComputedResult
-                             , closingRecord :: ClosingRecord
-                             } deriving (Show)
-
-parseSWMMBinary :: BL.ByteString -> SWMMObject
-parseSWMMBinary input = do
-    let closingByteString  = (BL.pack . reverse . take closingRecordsSize . reverse . BL.unpack) input
-        (closingRecord, _) = getClosingRecords closingByteString
-        (header, restAfterHead, _) = runGetState getHeader input 1
-        (ids, restAfterIds) = parseIds restAfterHead header
-        (objectProperties, restAfterObjectProperties) = getObjectProperties header restAfterIds
-        (reportingVariables, restAfterReportingVariables) = getReportingVariables restAfterObjectProperties
-        (reportingIntervals, restAfterReportingIntervals) = getReportingIntervals restAfterReportingVariables
-        (result, rest) = getComputedResults (numberOfPeriods closingRecord) reportingVariables header restAfterReportingIntervals
-    SWMMObject header ids objectProperties reportingVariables reportingIntervals result closingRecord
+    (ClosingRecord objectIdBytePosition
+                   objectPropertiesBytePosition
+                   computedResultsBytePosition
+                   numberOfReportingPeriods
+                   errorCodeStatus
+                   closingIdNumber,               rest7)
 
