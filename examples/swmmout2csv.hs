@@ -1,5 +1,5 @@
 -- |
--- Module : Water.SWMM.SWMMout2csv
+-- Module : Examples.swmmout2csv
 -- Copyright : (C) 2014 Siddhanathan Shanmugam
 -- License : LGPL (see LICENSE)
 -- Maintainer : siddhanathan@gmail.com
@@ -13,11 +13,11 @@
 
 module Main (main) where
 
-import           SWMM
-import qualified Data.ByteString.Lazy as BL        (appendFile, ByteString, readFile)
-import qualified Data.ByteString.Lazy.Char8 as BLC (pack, concat)
+import           Water.SWMM
+import qualified Data.ByteString.Lazy as BL        (ByteString, appendFile, readFile)
+import qualified Data.ByteString.Lazy.Char8 as BLC (pack, concat, any)
 import           System.IO     (appendFile)
-import           Data.DateTime (DateTime(..), addSeconds, parseDateTime)
+import           Data.DateTime (DateTime, addSeconds, parseDateTime)
 import           Data.Maybe    (fromJust)
 import           Data.List     (intersperse, transpose)
 
@@ -38,10 +38,13 @@ parseFileInput xs = go (reverse xs)
                           go ('\'':ys) = go ys
                           go       ys  = reverse ys
 
-addQuotes list = map (\x -> BLC.concat ["\"", x, "\""]) list
+addQuotesIfCommaIsPresent :: BL.ByteString -> BL.ByteString
+addQuotesIfCommaIsPresent x
+    | BLC.any ((==) ',') x = BLC.concat["\"", x, "\""]
+    | otherwise            = x
 
 printHeader :: FilePath -> [BL.ByteString] -> IO ()
-printHeader output list = do let bsList = "\"DateTime\"" : addQuotes list
+printHeader output list = do let bsList = "DateTime" : map addQuotesIfCommaIsPresent list
                              let csvList = intersperse "," bsList
                              mapM_ (BL.appendFile output) csvList
                              appendFile output "\n"

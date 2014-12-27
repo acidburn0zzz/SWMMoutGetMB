@@ -1,8 +1,17 @@
+-- |
+-- Module : Examples.example
+-- Copyright : (C) 2014 Siddhanathan Shanmugam
+-- License : LGPL (see LICENSE)
+-- Maintainer : siddhanathan@gmail.com
+-- Portability : very
+--
+-- Example of a program using SWMMoutGetMB for parsing SWMM .OUT files
+--
+
 module Main (main) where
 
-import qualified SWMM as SWMM
+import           Water.SWMM                 (parseSWMMBinary)
 import qualified Data.ByteString.Lazy as BL (readFile)
-import           System.IO
 
 parseFileInput :: String -> String
 parseFileInput (' ' :xs) = parseFileInput xs
@@ -17,6 +26,6 @@ main = do
     putStrLn "Please drag or drop the file, or enter filepath: "
     file <- getLine
     input <- BL.readFile $ parseFileInput file
-    let swmmObject = SWMM.parseSWMMBinary input
+    let swmmObject = parseSWMMBinary input
     print swmmObject
 

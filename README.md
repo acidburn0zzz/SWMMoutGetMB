@@ -54,6 +54,12 @@ To demonstrate how flexible the parser can be, the program
 [swmmout2csv](https://github.com/OOW/swmmout2csv) is implemented using the
 parser. Example code is present in `swmmout2csv.hs`.
 
+To run `swmmout2csv.hs`, simply use:
+
+~~~ bash
+$ runhaskell swmmout2csv.hs
+~~~
+
 SWMM OUT FILE FORMAT
 --------------------
 

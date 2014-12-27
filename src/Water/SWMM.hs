@@ -10,19 +10,19 @@
 
 {-# OPTIONS_GHC -fno-warn-warnings-deprecations #-}
 
-module SWMM ( SWMMObject(..)
-            , Header(..)
-            , Ids(..)
-            , Properties(..)
-            , ObjectProperties(..)
-            , Variables(..)
-            , ReportingVariables(..)
-            , ReportingInterval(..)
-            , ValuesForOneDateTime(..)
-            , ComputedResult
-            , ClosingRecord(..)
-            , parseSWMMBinary
-            ) where
+module Water.SWMM ( SWMMObject(..)
+                  , Header(..)
+                  , Ids(..)
+                  , Properties(..)
+                  , ObjectProperties(..)
+                  , Variables(..)
+                  , ReportingVariables(..)
+                  , ReportingInterval(..)
+                  , ValuesForOneDateTime(..)
+                  , ComputedResult
+                  , ClosingRecord(..)
+                  , parseSWMMBinary
+                  ) where
 
 import           Data.Binary.Get            (getWord32le, runGetState, Get(..), getLazyByteString)
 import           Data.Word                  (Word32(..))
