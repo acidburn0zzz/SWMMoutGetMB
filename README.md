@@ -32,6 +32,8 @@ $ cabal update
 $ cabal install binary
 $ cabal install data-binary-ieee754
 $ cabal install bytestring
+$ cabal install split
+$ cabal install datetime
 ~~~
 
 Usage
@@ -47,6 +49,10 @@ To see the output produced by printing the `SWMMObject`, simply run the program:
 ~~~ bash
 $ runhaskell example.hs
 ~~~
+
+To demonstrate how flexible the parser can be, the program
+[swmmout2csv](https://github.com/OOW/swmmout2csv) is implemented using the
+parser. Example code is present in `swmmout2csv.hs`.
 
 SWMM OUT FILE FORMAT
 --------------------

@@ -4,7 +4,7 @@
 -- License : LGPL (see LICENSE)
 -- Maintainer : siddhanathan@gmail.com
 -- Portability : very
--- 
+--
 -- Parser for SWMM 5 Binary .OUT files
 --
 
@@ -24,12 +24,13 @@ module SWMM ( SWMMObject(..)
             , parseSWMMBinary
             ) where
 
-import           Data.Binary.Get            (getWord32le, runGetState, Get(..), getByteString)
+import           Data.Binary.Get            (getWord32le, runGetState, Get(..), getLazyByteString)
 import           Data.Word                  (Word32(..))
 import           Data.ByteString.Internal   (ByteString)
 import           Control.Applicative        ((<$>), (<*>))
 import           Data.Binary.IEEE754        (getFloat32le, getFloat64le)
 import qualified Data.ByteString.Lazy as BL (ByteString, pack, unpack)
+import           Data.List.Split            (splitEvery)
 
 data SWMMObject = SWMMObject { header        :: Header
                              , ids           :: Ids
@@ -49,10 +50,10 @@ data Header = Header { headerIdNumber        :: Integer
                      , numberOfPollutants    :: Integer
                      } deriving (Show)
 
-data Ids = Ids { subcatchmentIds  :: [ByteString]
-               , nodeIds          :: [ByteString]
-               , linkIds          :: [ByteString]
-               , pollutantIds     :: [ByteString]
+data Ids = Ids { subcatchmentIds  :: [BL.ByteString]
+               , nodeIds          :: [BL.ByteString]
+               , linkIds          :: [BL.ByteString]
+               , pollutantIds     :: [BL.ByteString]
                , concentrationIds :: [Integer]
                } deriving (Show)
 
@@ -92,9 +93,9 @@ data Variables = Variables { numberOfVariables   :: Integer
                            } deriving (Show)
 
 data ValuesForOneDateTime = ValuesForOneDateTime { dateTimeValue     :: Double
-                                                 , subcatchmentValue :: [Float]
-                                                 , nodeValue         :: [Float]
-                                                 , linkValue         :: [Float]
+                                                 , subcatchmentValue :: [[Float]]
+                                                 , nodeValue         :: [[Float]]
+                                                 , linkValue         :: [[Float]]
                                                  , systemValue       :: [Float]
                                                  } deriving (Show)
 
@@ -114,12 +115,12 @@ getHeader = Header <$> a
 parseSWMMBinary :: BL.ByteString -> SWMMObject
 parseSWMMBinary input = do
     let closingByteString  = getClosingByteString input
-        (closingRecord, _) = getClosingRecords closingByteString
+        (closingRecord, _, _) = runGetState getClosingRecords closingByteString 1
         (header, rest1, _) = runGetState getHeader input 1
         (ids, rest2) = getIds rest1 header
         (objectProperties, rest3) = getObjectProperties header rest2
         (reportingVariables, rest4) = getReportingVariables rest3
-        (reportingIntervals, rest5) = getReportingIntervals rest4
+        (reportingIntervals, rest5, _) = runGetState getReportingIntervals rest4 1
         (result, rest6) = getComputedResults (numberOfPeriods closingRecord)
                                              reportingVariables header rest5
     SWMMObject header
@@ -148,12 +149,12 @@ getDecimals n input
     | otherwise = appendW w (getDecimals (n-1) rest)
                   where (w, rest, _) = runGetState getFloat32le input 1
 
-getByteStrings :: Integer -> BL.ByteString -> ([ByteString], BL.ByteString)
+getByteStrings :: Integer -> BL.ByteString -> ([BL.ByteString], BL.ByteString)
 getByteStrings n input
     | n == 0    = ([], input)
     | otherwise = appendW w (getByteStrings (n-1) rest)
                   where (c, r, _) = runGetState getWord32le input 1
-                        (w, rest, _) = runGetState ((getByteString . fromIntegral) c) r 1
+                        (w, rest, _) = runGetState ((getLazyByteString . fromIntegral) c) r 1
 
 getClosingByteString :: BL.ByteString -> BL.ByteString
 getClosingByteString = BL.pack . reverse . take closingRecordSize . reverse . BL.unpack
@@ -211,12 +212,13 @@ getReportingVariables rest1 = do
         reportingVariables = ReportingVariables subcatchment node link system
     (reportingVariables, rest9)
 
-getReportingIntervals :: BL.ByteString -> (ReportingInterval, BL.ByteString)
-getReportingIntervals rest1 = do
-    let (startDateTime, rest2, _) = runGetState getFloat64le rest1 1
-        (timeIntervals, rest3, _) = runGetState getIntegerWord32le rest2 1
-        reportingInterval = ReportingInterval startDateTime timeIntervals
-    (reportingInterval, rest3)
+getReportingIntervals :: Get ReportingInterval
+getReportingIntervals = ReportingInterval <$> getFloat64le
+                                          <*> getIntegerWord32le
+
+splitEveryRemainder :: Num b => Integer -> ([b], BL.ByteString) -> ([[b]], BL.ByteString)
+splitEveryRemainder n (l, r) = (splitEvery ns l, r)
+                               where ns = fromInteger n
 
 getComputedResults :: Integer -> ReportingVariables -> Header -> BL.ByteString
                    -> ([ValuesForOneDateTime], BL.ByteString)
@@ -224,15 +226,15 @@ getComputedResults n reportingVariables header rest1
     | n == 0    = ([], rest1)
     | otherwise = do
         let (dateTimeValue, rest2, _)  = runGetState getFloat64le rest1 1
-            (subcatchmentValue, rest3) = getDecimals n rest2
-                where n = numberOfSubcatchments header
-                        * (numberOfVariables . subcatchmentVariables) reportingVariables
-            (nodeValue, rest4) = getDecimals n rest3
-                where n = numberOfNodes header
-                        * (numberOfVariables . nodeVariables) reportingVariables
-            (linkValue, rest5) = getDecimals n rest4
-                where n = numberOfLinks header
-                        * (numberOfVariables . linkVariables) reportingVariables
+            (subcatchmentValue, rest3) = splitEveryRemainder nv $ getDecimals n rest2
+                where n  = numberOfSubcatchments header * nv
+                      nv = (numberOfVariables . subcatchmentVariables) reportingVariables
+            (nodeValue, rest4) = splitEveryRemainder nv $ getDecimals n rest3
+                where n  = numberOfNodes header * nv
+                      nv = (numberOfVariables . nodeVariables) reportingVariables
+            (linkValue, rest5) = splitEveryRemainder nv $ getDecimals n rest4
+                where n  = numberOfLinks header * nv
+                      nv = (numberOfVariables . linkVariables) reportingVariables
             (systemValue, rest6) = getDecimals n rest5
                 where n = (numberOfVariables . systemVariables) reportingVariables
             valueConstructor = ValuesForOneDateTime dateTimeValue
@@ -242,18 +244,12 @@ getComputedResults n reportingVariables header rest1
                                                     systemValue
         appendW valueConstructor (getComputedResults (n-1) reportingVariables header rest6)
 
-getClosingRecords :: BL.ByteString -> (ClosingRecord, BL.ByteString)
-getClosingRecords closingByteString = do
-    let (objectIdBytePosition, rest2, _) = runGetState getIntegerWord32le closingByteString 1
-        (objectPropertiesBytePosition, rest3, _) = runGetState getIntegerWord32le rest2 1
-        (computedResultsBytePosition, rest4, _)  = runGetState getIntegerWord32le rest3 1
-        (numberOfReportingPeriods, rest5, _)     = runGetState getIntegerWord32le rest4 1
-        (errorCodeStatus, rest6, _)              = runGetState getIntegerWord32le rest5 1
-        (closingIdNumber, rest7, _)              = runGetState getIntegerWord32le rest6 1
-    (ClosingRecord objectIdBytePosition
-                   objectPropertiesBytePosition
-                   computedResultsBytePosition
-                   numberOfReportingPeriods
-                   errorCodeStatus
-                   closingIdNumber,               rest7)
+getClosingRecords :: Get ClosingRecord
+getClosingRecords = ClosingRecord <$> a
+                                  <*> a
+                                  <*> a
+                                  <*> a
+                                  <*> a
+                                  <*> a
+                    where a = getIntegerWord32le
 

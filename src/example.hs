@@ -2,6 +2,7 @@ module Main (main) where
 
 import qualified SWMM as SWMM
 import qualified Data.ByteString.Lazy as BL (readFile)
+import           System.IO
 
 parseFileInput :: String -> String
 parseFileInput (' ' :xs) = parseFileInput xs
