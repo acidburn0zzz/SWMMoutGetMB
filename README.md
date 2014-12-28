@@ -18,14 +18,22 @@ Haskell programs.
 Installation
 ------------
 
-You would first need the haskell-platform. The installation of this depends on your OS, but if
-you're on Ubuntu, you can use the following terminal commands:
+Assuming you have Cabal, just use:
+
+~~~ bash
+$ cabal update
+$ cabal install SWMMoutGetMB
+~~~
+
+If you do not have Cabal already, you would first need the haskell-platform.
+The installation of this depends on your OS, but if you're on Ubuntu, you can
+use the following terminal commands:
 
 ~~~ bash
 $ sudo apt-get install haskell-platform
 ~~~
 
-Then, you need to get the libraries required for parsing binary data:
+If cabal install fails for some reason, you can manually install:
 
 ~~~ bash
 $ cabal update
@@ -34,6 +42,7 @@ $ cabal install data-binary-ieee754
 $ cabal install bytestring
 $ cabal install split
 $ cabal install datetime
+$ cabal install
 ~~~
 
 Usage
@@ -44,7 +53,13 @@ information present in the `.OUT` file. The `example.hs` file currently present 
 `SWMMObject`, but it should be possible to do any sort of manipulations with the `SWMMObject`,
 such as writing it out to a CSV file.
 
-To see the output produced by printing the `SWMMObject`, simply run the program:
+To use the parser in your own applications, use:
+
+~~~ haskell
+import Water.SWMM
+~~~
+
+To see the output produced by printing the `SWMMObject`, simply run the example program:
 
 ~~~ bash
 $ runhaskell example.hs
