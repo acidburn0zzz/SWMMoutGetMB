@@ -8,11 +8,9 @@
 -- Parser for SWMM 5 Binary .OUT files
 --
 
-{-# OPTIONS_GHC -fno-warn-warnings-deprecations #-}
-
 module Water.SWMM ( SWMMObject(..)
                   , Header(..)
-                  , Ids(..)
+                  , ObjectIds(..)
                   , Properties(..)
                   , ObjectProperties(..)
                   , Variables(..)
@@ -24,16 +22,15 @@ module Water.SWMM ( SWMMObject(..)
                   , parseSWMMBinary
                   ) where
 
-import           Data.Binary.Get            (getWord32le, runGetState, Get(..), getLazyByteString)
-import           Data.Word                  (Word32(..))
-import           Data.ByteString.Internal   (ByteString)
+import           Data.Binary.Get            (getWord32le, runGet, Get, getLazyByteString)
 import           Control.Applicative        ((<$>), (<*>))
 import           Data.Binary.IEEE754        (getFloat32le, getFloat64le)
 import qualified Data.ByteString.Lazy as BL (ByteString, pack, unpack)
-import           Data.List.Split            (splitEvery)
+import           Data.List.Split            (chunksOf)
+import           Control.Monad              (replicateM)
 
 data SWMMObject = SWMMObject { header        :: Header
-                             , ids           :: Ids
+                             , ids           :: ObjectIds
                              , properties    :: ObjectProperties
                              , variables     :: ReportingVariables
                              , intervals     :: ReportingInterval
@@ -50,12 +47,12 @@ data Header = Header { headerIdNumber        :: Integer
                      , numberOfPollutants    :: Integer
                      } deriving (Show)
 
-data Ids = Ids { subcatchmentIds  :: [BL.ByteString]
-               , nodeIds          :: [BL.ByteString]
-               , linkIds          :: [BL.ByteString]
-               , pollutantIds     :: [BL.ByteString]
-               , concentrationIds :: [Integer]
-               } deriving (Show)
+data ObjectIds = ObjectIds { subcatchmentIds  :: [BL.ByteString]
+                           , nodeIds          :: [BL.ByteString]
+                           , linkIds          :: [BL.ByteString]
+                           , pollutantIds     :: [BL.ByteString]
+                           , concentrationIds :: [Integer]
+                           } deriving (Show)
 
 data ObjectProperties = ObjectProperties { subcatchmentProperties :: Properties
                                          , nodeProperties         :: Properties
@@ -82,6 +79,8 @@ data ClosingRecord = ClosingRecord { idBytePosition         :: Integer
                                    , errorCode              :: Integer
                                    , closingIdNumber        :: Integer
                                    } deriving (Show)
+
+type Ids = [BL.ByteString]
 
 data Properties = Properties { numberOfProperties   :: Integer
                              , codeNumberProperties :: [Integer]
@@ -112,137 +111,95 @@ getHeader = Header <$> a
                    <*> a
             where a = getIntegerWord32le
 
+getSWMMObject :: ClosingRecord -> Get SWMMObject
+getSWMMObject closing = do
+    header <- getHeader
+    objectIds <- getObjectIds header
+    objectProperties <- getObjectProperties header
+    reportingVariables <- getReportingVariables
+    reportingIntervals <- getReportingIntervals
+    computedResult <- getComputedResults (numberOfPeriods closing) header reportingVariables
+    closingRecord <- getClosingRecords
+    return $ SWMMObject header
+                        objectIds
+                        objectProperties
+                        reportingVariables
+                        reportingIntervals
+                        computedResult
+                        closingRecord
+
 parseSWMMBinary :: BL.ByteString -> SWMMObject
 parseSWMMBinary input = do
-    let closingByteString  = getClosingByteString input
-        (closingRecord, _, _) = runGetState getClosingRecords closingByteString 1
-        (header, rest1, _) = runGetState getHeader input 1
-        (ids, rest2) = getIds rest1 header
-        (objectProperties, rest3) = getObjectProperties header rest2
-        (reportingVariables, rest4) = getReportingVariables rest3
-        (reportingIntervals, rest5, _) = runGetState getReportingIntervals rest4 1
-        (result, rest6) = getComputedResults (numberOfPeriods closingRecord)
-                                             reportingVariables header rest5
-    SWMMObject header
-               ids
-               objectProperties
-               reportingVariables
-               reportingIntervals
-               result
-               closingRecord
+    let closingRecord = runGet getClosingRecords (getClosingByteString input)
+        swmmObject    = runGet (getSWMMObject closingRecord) input
+    swmmObject
 
 getIntegerWord32le :: Get Integer
 getIntegerWord32le = fromIntegral <$> getWord32le
 
-getWords :: Integer -> BL.ByteString -> ([Integer], BL.ByteString)
-getWords n input
-    | n == 0    = ([], input)
-    | otherwise = appendW w (getWords (n-1) rest)
-                  where (w, rest, _) = runGetState getIntegerWord32le input 1
-
-appendW :: a -> ([a], BL.ByteString) -> ([a], BL.ByteString)
-appendW w (x, y) = (w:x, y)
-
-getDecimals :: Integer -> BL.ByteString -> ([Float], BL.ByteString)
-getDecimals n input
-    | n == 0    = ([], input)
-    | otherwise = appendW w (getDecimals (n-1) rest)
-                  where (w, rest, _) = runGetState getFloat32le input 1
-
-getByteStrings :: Integer -> BL.ByteString -> ([BL.ByteString], BL.ByteString)
-getByteStrings n input
-    | n == 0    = ([], input)
-    | otherwise = appendW w (getByteStrings (n-1) rest)
-                  where (c, r, _) = runGetState getWord32le input 1
-                        (w, rest, _) = runGetState ((getLazyByteString . fromIntegral) c) r 1
-
 getClosingByteString :: BL.ByteString -> BL.ByteString
 getClosingByteString = BL.pack . reverse . take closingRecordSize . reverse . BL.unpack
 
-getIds :: BL.ByteString -> Header -> (Ids, BL.ByteString)
-getIds rest1 header = do
-    let (subcatchments, rest2) = getByteStrings (numberOfSubcatchments header) rest1
-        (nodes, rest3)         = getByteStrings (numberOfNodes header) rest2
-        (links, rest4)         = getByteStrings (numberOfLinks header) rest3
-        (pollutants, rest5)    = getByteStrings (numberOfPollutants header) rest4
-        (pollutantConcentrationUnits, rest6) = getWords (numberOfPollutants header) rest5
-    (Ids subcatchments nodes links pollutants pollutantConcentrationUnits, rest6)
+getObjectIds :: Header -> Get ObjectIds
+getObjectIds header =
+    ObjectIds <$> getIds (numberOfSubcatchments header)
+              <*> getIds (numberOfNodes header)
+              <*> getIds (numberOfLinks header)
+              <*> getIds (numberOfPollutants header)
+              <*> replicateM (fromInteger . numberOfPollutants $ header) getIntegerWord32le
 
-getObjectProperties :: Header -> BL.ByteString -> (ObjectProperties, BL.ByteString)
-getObjectProperties header rest1 = do
-    let (numberOfSubcatchmentProperties, rest2, _) = runGetState getIntegerWord32le rest1 1
-        (codeNumberSubcatchmentProperties, rest3)  = getWords numberOfSubcatchmentProperties rest2
-        (valueSubcatchmentProperties, rest4)       = getDecimals n rest3
-                                                     where n = numberOfSubcatchmentProperties
-                                                             * numberOfSubcatchments header
-        (numberOfNodeProperties, rest5, _)         = runGetState getIntegerWord32le rest4 1
-        (codeNumberNodeProperties, rest6)          = getWords numberOfNodeProperties rest5
-        (valueNodeProperties, rest7)               = getDecimals (numberOfNodeProperties
-                                                                 * numberOfNodes header) rest6
-        (numberOfLinkProperties, rest8, _)         = runGetState getIntegerWord32le rest7 1
-        (codeNumberLinkProperties, rest9)          = getWords numberOfLinkProperties rest8
-        (valueLinkProperties, rest10)              = getDecimals (numberOfLinkProperties
-                                                                 * numberOfLinks header) rest9
-        subcatchment = Properties numberOfSubcatchmentProperties
-                                  codeNumberSubcatchmentProperties
-                                  valueSubcatchmentProperties
-        node         = Properties numberOfNodeProperties
-                                  codeNumberNodeProperties
-                                  valueNodeProperties
-        link         = Properties numberOfLinkProperties
-                                  codeNumberLinkProperties
-                                  valueLinkProperties
-        object = ObjectProperties subcatchment node link
-    (object, rest10)
+getIds :: Integer -> Get [BL.ByteString]
+getIds n = replicateM (fromInteger n)
+                      (getIntegerWord32le >>= getLazyByteString . fromInteger)
 
-getReportingVariables :: BL.ByteString -> (ReportingVariables, BL.ByteString)
-getReportingVariables rest1 = do
-    let (numberOfSubcatchmentVariables, rest2, _) = runGetState getIntegerWord32le rest1 1
-        (codeNumberSubcatchmentVariables, rest3)  = getWords numberOfSubcatchmentVariables rest2
-        (numberOfNodeVariables, rest4, _)         = runGetState getIntegerWord32le rest3 1
-        (codeNumberNodeVariables, rest5)          = getWords numberOfNodeVariables rest4
-        (numberOfLinkVariables, rest6, _)         = runGetState getIntegerWord32le rest5 1
-        (codeNumberLinkVariables, rest7)          = getWords numberOfLinkVariables rest6
-        (numberOfSystemVariables, rest8, _)       = runGetState getIntegerWord32le rest7 1
-        (codeNumberSystemVariables, rest9)        = getWords numberOfSystemVariables rest8
-        subcatchment = Variables numberOfSubcatchmentVariables codeNumberSubcatchmentVariables
-        node         = Variables numberOfNodeVariables codeNumberNodeVariables
-        link         = Variables numberOfLinkVariables codeNumberLinkVariables
-        system       = Variables numberOfSystemVariables codeNumberSystemVariables
-        reportingVariables = ReportingVariables subcatchment node link system
-    (reportingVariables, rest9)
+getVariables :: Get Variables
+getVariables = do
+    number <- getIntegerWord32le
+    codeNumbers <- replicateM (fromInteger number) getIntegerWord32le
+    return $ Variables number codeNumbers
+
+getProperties :: Integer -> Get Properties
+getProperties n = do
+    number <- getIntegerWord32le
+    codeNumbers <- replicateM (fromInteger number) getIntegerWord32le
+    values <- replicateM (fromInteger (number * n)) getFloat32le
+    return $ Properties number codeNumbers values
+
+getObjectProperties :: Header -> Get ObjectProperties
+getObjectProperties header = ObjectProperties <$> getProperties (numberOfSubcatchments header)
+                                              <*> getProperties (numberOfNodes header)
+                                              <*> getProperties (numberOfLinks header)
+
+getReportingVariables :: Get ReportingVariables
+getReportingVariables = ReportingVariables <$> a
+                                           <*> a
+                                           <*> a
+                                           <*> a
+                        where a = getVariables
 
 getReportingIntervals :: Get ReportingInterval
 getReportingIntervals = ReportingInterval <$> getFloat64le
                                           <*> getIntegerWord32le
 
-splitEveryRemainder :: Num b => Integer -> ([b], BL.ByteString) -> ([[b]], BL.ByteString)
-splitEveryRemainder n (l, r) = (splitEvery ns l, r)
-                               where ns = fromInteger n
+getResults :: Header -> ReportingVariables -> Get ValuesForOneDateTime
+getResults header report = do
+    ValuesForOneDateTime <$> getFloat64le
+                         <*> getSplitValues (numberOfSubcatchments header * ns) ns
+                         <*> getSplitValues (numberOfNodes header * nn) nn
+                         <*> getSplitValues (numberOfLinks header * nl) nl
+                         <*> getValues (numberOfVariables . systemVariables $ report)
+    where ns = (numberOfVariables . subcatchmentVariables) report
+          nn = (numberOfVariables . nodeVariables) report
+          nl = (numberOfVariables . linkVariables) report
 
-getComputedResults :: Integer -> ReportingVariables -> Header -> BL.ByteString
-                   -> ([ValuesForOneDateTime], BL.ByteString)
-getComputedResults n reportingVariables header rest1
-    | n == 0    = ([], rest1)
-    | otherwise = do
-        let (dateTimeValue, rest2, _)  = runGetState getFloat64le rest1 1
-            (subcatchmentValue, rest3) = splitEveryRemainder nv $ getDecimals n rest2
-                where n  = numberOfSubcatchments header * nv
-                      nv = (numberOfVariables . subcatchmentVariables) reportingVariables
-            (nodeValue, rest4) = splitEveryRemainder nv $ getDecimals n rest3
-                where n  = numberOfNodes header * nv
-                      nv = (numberOfVariables . nodeVariables) reportingVariables
-            (linkValue, rest5) = splitEveryRemainder nv $ getDecimals n rest4
-                where n  = numberOfLinks header * nv
-                      nv = (numberOfVariables . linkVariables) reportingVariables
-            (systemValue, rest6) = getDecimals n rest5
-                where n = (numberOfVariables . systemVariables) reportingVariables
-            valueConstructor = ValuesForOneDateTime dateTimeValue
-                                                    subcatchmentValue
-                                                    nodeValue
-                                                    linkValue
-                                                    systemValue
-        appendW valueConstructor (getComputedResults (n-1) reportingVariables header rest6)
+getComputedResults :: Integer -> Header -> ReportingVariables -> Get ComputedResult
+getComputedResults n header report = replicateM (fromInteger n) (getResults header report)
+
+getValues :: Integer -> Get [Float]
+getValues n = replicateM (fromInteger n) getFloat32le
+
+getSplitValues :: Integer -> Integer -> Get [[Float]]
+getSplitValues n nv = chunksOf (fromInteger nv) <$> replicateM (fromInteger n) getFloat32le
 
 getClosingRecords :: Get ClosingRecord
 getClosingRecords = ClosingRecord <$> a
