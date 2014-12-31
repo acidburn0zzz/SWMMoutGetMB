@@ -62,7 +62,11 @@ library
   -- other-modules:       Examples
   
   -- Other library packages from which modules are imported.
-  build-depends:       base ==4.6.*, binary ==0.7.*, bytestring ==0.10.*, data-binary-ieee754 ==0.4.*, split ==0.2.*
+  build-depends:       base ==4.6.*,
+                       binary ==0.7.*,
+                       bytestring ==0.10.*,
+                       data-binary-ieee754 == 0.4.*,
+                       split ==0.2.*
   
   -- Directories containing source files.
   hs-source-dirs:      src

@@ -8,6 +8,8 @@
 -- Parser for SWMM 5 Binary .OUT files
 --
 
+{-# LANGUAGE Trustworthy #-}
+
 module Water.SWMM ( SWMMObject(..)
                   , Header(..)
                   , ObjectIds(..)
@@ -17,17 +19,20 @@ module Water.SWMM ( SWMMObject(..)
                   , ReportingVariables(..)
                   , ReportingInterval(..)
                   , ValuesForOneDateTime(..)
-                  , ComputedResult
+                  , ComputedResult(..)
                   , ClosingRecord(..)
                   , parseSWMMBinary
                   ) where
 
-import           Data.Binary.Get            (getWord32le, runGet, Get, getLazyByteString)
-import           Control.Applicative        ((<$>), (<*>))
-import           Data.Binary.IEEE754        (getFloat32le, getFloat64le)
-import qualified Data.ByteString.Lazy as BL (ByteString, pack, unpack)
-import           Data.List.Split            (chunksOf)
-import           Control.Monad              (replicateM)
+import safe           Data.Binary.Get            (getWord32le, runGet, Get, getLazyByteString)
+import safe           Control.Applicative        ((<$>), (<*>))
+import safe qualified Data.ByteString.Lazy as BL (ByteString, pack, unpack)
+import safe           Data.List.Split            (chunksOf)
+import safe           Control.Monad              (replicateM)
+
+-- There is an implicit assumption that IEEE-754 is the in-memory representation.
+-- If we assume this is the case, then this is safe.
+import                Data.Binary.IEEE754        (getFloat32le, getFloat64le)
 
 data SWMMObject = SWMMObject { header        :: Header
                              , ids           :: ObjectIds
@@ -36,7 +41,7 @@ data SWMMObject = SWMMObject { header        :: Header
                              , intervals     :: ReportingInterval
                              , result        :: ComputedResult
                              , closingRecord :: ClosingRecord
-                             } deriving (Show)
+                             } deriving (Show, Eq)
 
 data Header = Header { headerIdNumber        :: Integer
                      , versionNumber         :: Integer
@@ -45,32 +50,34 @@ data Header = Header { headerIdNumber        :: Integer
                      , numberOfNodes         :: Integer
                      , numberOfLinks         :: Integer
                      , numberOfPollutants    :: Integer
-                     } deriving (Show)
+                     } deriving (Show, Eq)
 
 data ObjectIds = ObjectIds { subcatchmentIds  :: [BL.ByteString]
                            , nodeIds          :: [BL.ByteString]
                            , linkIds          :: [BL.ByteString]
                            , pollutantIds     :: [BL.ByteString]
                            , concentrationIds :: [Integer]
-                           } deriving (Show)
+                           } deriving (Show, Eq)
 
 data ObjectProperties = ObjectProperties { subcatchmentProperties :: Properties
                                          , nodeProperties         :: Properties
                                          , linkProperties         :: Properties
-					 } deriving (Show)
+					 } deriving (Show, Eq)
 
 data ReportingVariables = ReportingVariables { subcatchmentVariables :: Variables
                                              , nodeVariables         :: Variables
                                              , linkVariables         :: Variables
                                              , systemVariables       :: Variables
-                                             } deriving (Show)
+                                             } deriving (Show, Eq)
 
 
 data ReportingInterval = ReportingInterval { startDateTime :: Double
                                            , timeIntervals :: Integer
-                                           } deriving (Show)
+                                           } deriving (Show, Eq)
 
-type ComputedResult = [ValuesForOneDateTime]
+--type ComputedResult = [ValuesForOneDateTime]
+data ComputedResult = ComputedResult { allDateTimes :: [ValuesForOneDateTime] }
+                      deriving (Show, Eq)
 
 data ClosingRecord = ClosingRecord { idBytePosition         :: Integer
                                    , propertiesBytePosition :: Integer
@@ -78,25 +85,28 @@ data ClosingRecord = ClosingRecord { idBytePosition         :: Integer
                                    , numberOfPeriods        :: Integer
                                    , errorCode              :: Integer
                                    , closingIdNumber        :: Integer
-                                   } deriving (Show)
+                                   } deriving (Show, Eq)
 
 type Ids = [BL.ByteString]
 
 data Properties = Properties { numberOfProperties   :: Integer
                              , codeNumberProperties :: [Integer]
                              , valueProperties      :: [Float]
-                             } deriving (Show)
+                             } deriving (Show, Eq)
 
 data Variables = Variables { numberOfVariables   :: Integer
                            , codeNumberVariables :: [Integer]
-                           } deriving (Show)
+                           } deriving (Show, Eq)
 
 data ValuesForOneDateTime = ValuesForOneDateTime { dateTimeValue     :: Double
                                                  , subcatchmentValue :: [[Float]]
                                                  , nodeValue         :: [[Float]]
                                                  , linkValue         :: [[Float]]
                                                  , systemValue       :: [Float]
-                                                 } deriving (Show)
+                                                 } deriving (Show, Eq)
+
+instance Ord ValuesForOneDateTime where
+    a <= b = dateTimeValue a <= dateTimeValue b
 
 closingRecordSize :: Int
 closingRecordSize = 6 * 4
@@ -193,7 +203,7 @@ getResults header report = do
           nl = (numberOfVariables . linkVariables) report
 
 getComputedResults :: Integer -> Header -> ReportingVariables -> Get ComputedResult
-getComputedResults n header report = replicateM (fromInteger n) (getResults header report)
+getComputedResults n header report = ComputedResult <$> replicateM (fromInteger n) (getResults header report)
 
 getValues :: Integer -> Get [Float]
 getValues n = replicateM (fromInteger n) getFloat32le

@@ -13,21 +13,67 @@
 
 module Main (main) where
 
+import           Control.Applicative ((<$>))
+import           Data.Char           (isDigit, isSpace)
+import           Data.Csv            (encode)
+import           Data.DateTime       (DateTime, addSeconds, parseDateTime)
+import           Data.List           (intersperse, transpose, elemIndex, elem)
+import           Data.List.Split     (splitOn)
+import           Data.Maybe          (fromJust)
+import           Data.Monoid         (Monoid(..))
+import           System.IO           (appendFile)
 import           Water.SWMM
 import qualified Data.ByteString.Lazy as BL        (ByteString, appendFile, readFile)
 import qualified Data.ByteString.Lazy.Char8 as BLC (ByteString, pack, concat, any, unpack, toStrict, append, lines, unlines)
-import           System.IO     (appendFile)
-import           Data.DateTime (DateTime, addSeconds, parseDateTime)
-import           Data.Maybe    (fromJust)
-import           Data.List     (intersperse, transpose, elemIndex, elem)
-import           Data.List.Split (splitOn)
-import           Data.Char       (isDigit, isSpace)
-import           Control.Applicative ((<$>))
-import qualified Data.Vector as DV
-import qualified Data.Csv as CSV
 
 constantSWMMEpoch :: DateTime
 constantSWMMEpoch = fromJust $ parseDateTime "%Y-%m-%d %H:%M:%S" "1899-12-30 00:00:00"
+
+-- Identity element for monoid
+swmmId :: SWMMObject
+swmmId = SWMMObject (Header 516114522 51000 0 0 0 0 0)
+                    (ObjectIds [] [] [] [] [])
+                    (ObjectProperties (Properties 0 [] [])
+                                      (Properties 0 [] [])
+                                      (Properties 0 [] []))
+                    (ReportingVariables (Variables 0 [])
+                                        (Variables 0 [])
+                                        (Variables 0 [])
+                                        (Variables 0 []))
+                    (ReportingInterval 0.0 0)
+                    (ComputedResult [])
+                    (ClosingRecord 0 0 0 0 0 516114522)
+
+isSimilar :: SWMMObject -> SWMMObject -> Bool
+isSimilar a b = header a == header b
+              && ids a == ids b
+              && properties a == properties b
+              && variables a == variables b
+              && (timeIntervals . intervals) a == (timeIntervals . intervals) b
+              && (closingIdNumber . closingRecord) a == (closingIdNumber . closingRecord) b
+
+noDuplicates :: SWMMObject -> SWMMObject -> Bool
+noDuplicates a b = sort(a `union` b) == sort(a ++ b)
+
+combineSwmmFiles :: SWMMObject -> SWMMObject -> SWMMObject
+combineSwmmFiles a b
+    | a == swmmId = b
+    | b == swmmId = a
+    | isSimilar a b =
+        SWMMObject (header a)
+                   (ids a)
+                   (properties a)
+                   (variables a)
+                   (ReportingInterval (minimum (map (startDateTime . intervals) [a,b]))
+                                      (timeIntervals . intervals $ a))
+                   (ComputedResult ((allDateTimes . result) a ++ (allDateTimes . result) b))
+                   (ClosingRecord 0 0 0 0 0 516114522)
+    | otherwise = error "SWMM Files are not consistent"
+
+-- Allows combining two .OUT files by treating them as monoids
+instance Monoid SWMMObject where
+    mempty = swmmId
+    mappend = combineSwmmFiles
 
 daysToSeconds :: Num a => a -> a
 daysToSeconds x = x * 24 * 60 * 60
@@ -61,7 +107,7 @@ parseUserOptions s
 printZippedOptions :: (Int, String) -> IO ()
 printZippedOptions (a, b) = print $ show a ++ " - " ++ b
 
-getIndices :: [Int] -> [a] -> [a]
+getIndices :: Eq a => [Int] -> [a] -> [a]
 getIndices js xs = [a | a <- xs, (fromJust $ elemIndex a xs) `elem` js]
 
 getUserVariables :: [Integer] -> [BLC.ByteString] -> IO [Int]
@@ -137,13 +183,13 @@ printAllValues swmm fIds fVars strOption output fValue dateTimes = do
     putStrLn $ "Select " ++ strOption ++ " ids: "
     userColumns <- getUserIds idsList
     mapM_ (\y -> do let outputFile = output ++ "/" ++ strOption ++ show y ++ ".csv"
-                    let csvHeader = CSV.encode ["DateTime" : (map BLC.unpack (getIndices userColumns idsList))]
+                    let csvHeader = encode ["DateTime" : (map BLC.unpack (getIndices userColumns idsList))]
                     BL.appendFile outputFile csvHeader
                     let values =
                            (map ( (getIndices userColumns)
                                 . (getValue fValue y)
-                                ) (result swmm))
-                    let csvValues = CSV.encode values
+                                ) ((allDateTimes . result) swmm))
+                    let csvValues = encode values
                     let csvWithDates = BLC.unlines (zipWith (zipDateTimeWithValues) dateTimes (BLC.lines csvValues))
                     BL.appendFile outputFile csvWithDates
           ) userVariables
@@ -161,7 +207,7 @@ main = do
     putStrLn ""
     lazy <- BL.readFile input
     let swmmObject = parseSWMMBinary lazy
-    let dateTimes = map dateTimeValue $ result swmmObject
+    let dateTimes = map dateTimeValue $ (allDateTimes . result) swmmObject
     putStrLn "Enter output file directory: "
     outFile <- getLine
     let output = parseFileInput outFile
@@ -184,10 +230,10 @@ main = do
     let outputFileName = output ++ "/system.csv"
     putStrLn "Select system ids: "
     userSystemColumns <- getUserIds systemIdsList
-    let csvHeader = CSV.encode ["DateTime" : (map BLC.unpack (getIndices userSystemColumns systemIdsList))]
+    let csvHeader = encode ["DateTime" : (map BLC.unpack (getIndices userSystemColumns systemIdsList))]
     BL.appendFile outputFileName csvHeader
-    let values = map ((getIndices userSystemColumns) . systemValue) (result swmmObject)
-    let csvValues = CSV.encode values
+    let values = map ((getIndices userSystemColumns) . systemValue) ((allDateTimes . result) swmmObject)
+    let csvValues = encode values
     let csvWithDates = BLC.unlines (zipWith (zipDateTimeWithValues) dateTimes (BLC.lines csvValues))
     BL.appendFile outputFileName csvWithDates
 
