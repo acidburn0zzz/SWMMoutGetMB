@@ -27,6 +27,7 @@ module Water.SWMM ( SWMMObject(..)
 import safe           Data.Binary.Get            (getWord32le, runGet, Get, getLazyByteString)
 import safe           Control.Applicative        ((<$>), (<*>))
 import safe qualified Data.ByteString.Lazy as BL (ByteString, pack, unpack)
+import safe qualified Data.ByteString.Lazy.Char8 as BLC (ByteString, pack, unpack)
 import safe           Data.List.Split            (chunksOf)
 import safe           Control.Monad              (replicateM)
 
@@ -52,10 +53,10 @@ data Header = Header { headerIdNumber        :: Integer
                      , numberOfPollutants    :: Integer
                      } deriving (Show, Eq)
 
-data ObjectIds = ObjectIds { subcatchmentIds  :: [BL.ByteString]
-                           , nodeIds          :: [BL.ByteString]
-                           , linkIds          :: [BL.ByteString]
-                           , pollutantIds     :: [BL.ByteString]
+data ObjectIds = ObjectIds { subcatchmentIds  :: [BLC.ByteString]
+                           , nodeIds          :: [BLC.ByteString]
+                           , linkIds          :: [BLC.ByteString]
+                           , pollutantIds     :: [BLC.ByteString]
                            , concentrationIds :: [Integer]
                            } deriving (Show, Eq)
 

@@ -17,14 +17,14 @@ import           Control.Applicative ((<$>))
 import           Data.Char           (isDigit, isSpace)
 import           Data.Csv            (encode)
 import           Data.DateTime       (DateTime, addSeconds, parseDateTime)
-import           Data.List           (intersperse, transpose, elemIndex, elem)
+import           Data.List           (intersperse, transpose, elemIndex, elem, sort, union)
 import           Data.List.Split     (splitOn)
 import           Data.Maybe          (fromJust)
-import           Data.Monoid         (Monoid(..))
+import           Data.Monoid         (Monoid(..), (<>))
 import           System.IO           (appendFile)
 import           Water.SWMM
 import qualified Data.ByteString.Lazy as BL        (ByteString, appendFile, readFile)
-import qualified Data.ByteString.Lazy.Char8 as BLC (ByteString, pack, concat, any, unpack, toStrict, append, lines, unlines)
+import qualified Data.ByteString.Lazy.Char8 as BLC (ByteString, pack, concat, any, unpack, toStrict, append, lines, unlines, appendFile)
 
 constantSWMMEpoch :: DateTime
 constantSWMMEpoch = fromJust $ parseDateTime "%Y-%m-%d %H:%M:%S" "1899-12-30 00:00:00"
@@ -53,13 +53,15 @@ isSimilar a b = header a == header b
               && (closingIdNumber . closingRecord) a == (closingIdNumber . closingRecord) b
 
 noDuplicates :: SWMMObject -> SWMMObject -> Bool
-noDuplicates a b = sort(a `union` b) == sort(a ++ b)
+noDuplicates a b = sort(x `union` y) == sort(x ++ y)
+                   where x = (allDateTimes . result) a
+                         y = (allDateTimes . result) b
 
 combineSwmmFiles :: SWMMObject -> SWMMObject -> SWMMObject
 combineSwmmFiles a b
     | a == swmmId = b
     | b == swmmId = a
-    | isSimilar a b =
+    | isSimilar a b  && noDuplicates a b =
         SWMMObject (header a)
                    (ids a)
                    (properties a)
@@ -199,14 +201,20 @@ getValue f y x = (transpose . f $ x) !! y
 
 zipDateTimeWithValues a b = BLC.append (BLC.pack ((show (getSWMMTime a))++",")) b
 
+getFiles :: IO [String]
+getFiles = do
+    file <- parseFileInput <$> getLine
+    if null file
+    then return []
+    else (file:) <$> getFiles
+
 main :: IO ()
 main = do
-    putStrLn "Please drag or drop the file, or enter filepath: "
-    file <- getLine
-    let input = parseFileInput file
-    putStrLn ""
-    lazy <- BL.readFile input
-    let swmmObject = parseSWMMBinary lazy
+    putStrLn "Press enter when done"
+    putStrLn "Please drag and drop files one by one, or enter filepaths: "
+    files <- map parseSWMMBinary <$> ((sequence . map (BL.readFile)) =<< getFiles)
+    --print <$> noDuplicates swmmObj swmmObj22
+    let swmmObject = foldl1 ((<>)) files
     let dateTimes = map dateTimeValue $ (allDateTimes . result) swmmObject
     putStrLn "Enter output file directory: "
     outFile <- getLine
