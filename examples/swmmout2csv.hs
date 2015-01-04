@@ -70,7 +70,7 @@ combineSwmmFiles a b
                                       (timeIntervals . intervals $ a))
                    (ComputedResult ((allDateTimes . result) a ++ (allDateTimes . result) b))
                    (ClosingRecord 0 0 0 0 0 516114522)
-    | otherwise = error "SWMM Files are not consistent"
+    | otherwise = error "ERROR: SWMM Files are not consistent"
 
 -- Allows combining two .OUT files by treating them as monoids
 instance Monoid SWMMObject where

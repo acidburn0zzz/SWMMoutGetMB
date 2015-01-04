@@ -104,10 +104,13 @@ data ValuesForOneDateTime = ValuesForOneDateTime { dateTimeValue     :: Double
                                                  , nodeValue         :: [[Float]]
                                                  , linkValue         :: [[Float]]
                                                  , systemValue       :: [Float]
-                                                 } deriving (Show, Eq)
+                                                 } deriving (Show)
 
 instance Ord ValuesForOneDateTime where
     a <= b = dateTimeValue a <= dateTimeValue b
+
+instance Eq ValuesForOneDateTime where
+    a == b = dateTimeValue a == dateTimeValue b
 
 closingRecordSize :: Int
 closingRecordSize = 6 * 4
